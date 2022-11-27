@@ -1,26 +1,98 @@
 
+local serialize_inventory_list = function(list)
+	local list_table = {}
+	for _, stack in ipairs(list) do
+		table.insert(list_table, stack:to_string())
+	end
+	return minetest.serialize(list_table)
+end
+
+local deserialize_inventory_list = function(list_string)
+	local list_table = minetest.deserialize(list_string)
+	local list = {}
+	for _, stack in ipairs(list_table or {}) do
+		table.insert(list, ItemStack(stack))
+	end
+	return list
+end
+
 WeldAllEntity = {
 	initial_properties = {
 		physical = true,
 		collide_with_objects = true,
 		--pointable = true,
 		collisionbox = {-0.35, -0.5, -0.35, 0.35, 0.5, 0.35},
-		visual_size = {x = 4, y = 4 },
+		visual_size = {x = 1, y = 1 },
 		mesh = "weld_all_bot_weld_all_bot.obj",
 		textures = { "weld_all_bot_yellow.png" },
 		visual = "mesh",
 		--static_save = false,
 		use_texture_alpha = true,
 	},
+	_owning_player_name = nil,
 	commands = {},
 	on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
 		self.object:remove()
 	end,
+	on_activate = function(self, staticdata, dtime_s)
+		local state = minetest.deserialize(staticdata, true)
+		if not state then return end
+		self._name = state.name
+		self._owning_player_name = state.owning_player_name
+		minetest.debug("loaded bot " .. dump(self._name))
+		if state.name and state.serialized_inventory then
+			self:get_or_create_inventory():set_list("main", deserialize_inventory_list(state.serialized_inventory))
+		end
+	end,
+	get_staticdata = function(self)
+		minetest.debug("saving bot " .. dump(self._name))
+		if self._name then
+			local inv = {}
+			if self:get_inventory() then
+				inv = self:get_inventory():get_list("main")
+			end
+			return minetest.serialize(
+				{
+					name = self._name,
+					owning_player_name = self._owning_player_name,
+					serialized_inventory = serialize_inventory_list(inv)
+				})
+			end
+	end,
 }
 
 
-function get_inventory(unique_name)
-	return minetest.get_inventory({type="detached", name=unique_name})
+function WeldAllEntity.init_after_spawn(self, user)
+	local time = os.date("!*t")
+	local datetimestr = time.year .. time.month .. time.day .. "_" .. time.hour .. time.min .. time.sec
+	-- set a most likely unique name
+	self._name = datetimestr
+	self._owning_player_name = user:get_player_name()
+
+	-- if the inventory already exists, there exists a currently loaded entity with the same name. Count up.
+	local check_existing_inv = self:get_inventory()
+	local index = 2
+	while check_existing_inv do
+		self._name = datetimestr .. "_" .. tostring(index)
+		index = index + 1
+		check_existing_inv = self:get_inventory()
+	end
+	
+	local inv = create_inventory(self:get_inventory_name())
+	inv:set_size("main", 6)
+	minetest.debug("weld_all_bot spawned as " .. self._name)
+	--inv:set_width("main",8)
+end
+
+
+function WeldAllEntity.get_or_create_inventory(self)
+	local inv = self:get_inventory()
+	if inv then return inv end
+	return create_inventory(self:get_inventory_name())
+end
+
+function WeldAllEntity.get_inventory(self)
+	return minetest.get_inventory({type="detached", name=self:get_inventory_name()})
 end
 
 
@@ -61,11 +133,17 @@ end
 
 
 function show_inventory(playername, unique_name)
+	minetest.debug("showing inv " .. unique_name)
 	minetest.show_formspec(playername, "weld_all_bot:" .. unique_name, 
 	"size[8,9]"..
 	"style_type[list;noclip=false;size=1.0,1.0;spacing=0.25,0.25]"..
 	"list[detached:" .. unique_name .. ";main;0,0;8,4;]" ..
 	"list[current_player;main;0,5;8,4;]")
+end
+
+
+function  WeldAllEntity.get_inventory_name(self)
+	return self._owning_player_name .. "/weld_all_bot:" .. self._name
 end
 
 
@@ -85,7 +163,7 @@ end
 
 
 function WeldAllEntity.set_yaw_by_direction(self, direction)
-	self.object:setyaw(math.atan2(direction.z, direction.x) - math.pi / 2)
+	self.object:setyaw(math.atan2(direction.z, direction.x))
 end
 
 
@@ -100,7 +178,7 @@ function WeldAllEntity.change_direction(self, destination, forward_speed)
 		velocity.y = 5
 	end
   
-	self.object:setvelocity(velocity)
+	self.object:set_velocity(velocity)
 	self:set_yaw_by_direction(direction)
 end
 
@@ -110,8 +188,20 @@ function WeldAllEntity.change_local_dir(self, dir, forward_speed)
 	if not forward_speed then forward_speed = 1.5 end
 	local velocity = vector.multiply(vector.normalize(dir), 1.5)
   
-	self.object:setvelocity(velocity)
+	self.object:set_velocity(velocity)
 	self:set_yaw_by_direction(dir)
+end
+
+
+-- move in direction move_dir while facing given face_dir
+-- does not turn if no face_dir is given
+function WeldAllEntity.set_move_dir_and_face_dir(self, move_dir, face_dir)
+	if face_dir then
+		self:set_yaw_by_direction(face_dir)
+	end
+	local speed = 1.5
+	local velocity = vector.multiply(vector.normalize(move_dir), speed)
+	self.object:set_velocity(velocity)
 end
 
 
@@ -189,6 +279,10 @@ function WeldAllEntity.find_path(self, destination)
 	return path
 end
 
+function WeldAllEntity.get_owner(self)
+	return minetest.get_player_by_name(self._owning_player_name)
+end
+
 function WeldAllEntity.stop_movement(self)
 	self.object:setvelocity{x = 0, y = 0, z = 0}
 end
@@ -207,15 +301,12 @@ end
 function WeldAllEntity.interact_with_door(self, pos, do_open)
 	local node = minetest.get_node(pos)
 	local nod = minetest.registered_nodes[node.name]
-	minetest.debug("checking entrance: " .. dump(pos))
 	if not is_entrance_node(pos) then
 		minetest.debug("not an entrance: " .. node.name)
 	end
 	if is_trapdoor_open(pos) ~= do_open then
-		--minetest.debug(dump(nod))
-		nod.on_rightclick(pos, nod, nil, nil, nil)
-		--nod.on_rightclick(pos, nod, self.object, nil, nil)
-		--doors.get(pos):toggle(self.object)
+		--nod.on_rightclick(pos, nod, nil, nil, nil)
+		doors.get(pos):toggle(self:get_owner())
 	end
 end
 
@@ -241,12 +332,11 @@ local function drop_items(pos, drops)
 			y = pos.y - 0.5 + math.random(),
 			z = pos.z - 0.5 + math.random()
 		}, item)
-		inv:add_item("main", ItemStack(item))
 	end
 end
 
 
-local can_dig_drop = function(pos)
+function WeldAllEntity.can_dig_drop(self, pos)
 
 	if minetest.is_protected(pos, "") then
 		return false
@@ -264,9 +354,11 @@ local can_dig_drop = function(pos)
 
 		local drops = minetest.get_node_drops(node)
 
-		local inv = get_inventory("my_test_inv")
-		-- TODO: move inventory creation to object loading / initialization
-		if not inv then inv = create_inventory("my_test_inv") end
+		local inv = self:get_inventory()
+		
+		for _, item in ipairs(drops) do
+			local leftover_items = inv:add_item("main", ItemStack(item))
+		end
 
 		minetest.remove_node(pos)
 
@@ -287,10 +379,11 @@ function WeldAllEntity.has_left_right_support(self)
 end
 
 
-function WeldAllEntity.on_step(self)
+function WeldAllEntity.on_step(self, dtime, moveresult)
 	local current_command = #self.commands > 0 and self.commands[1] or nil
 
 	if not current_command then return end
+	--minetest.debug("colliding: " .. dump(moveresult.collides ))
 
 	if not current_command.initialized then
 		current_command.initialized = true
@@ -312,7 +405,7 @@ end
 
 
 function WeldAllEntity.mine(self, pos)
-	can_dig_drop(pos)
+	self:can_dig_drop(pos)
 end
 
 

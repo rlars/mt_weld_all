@@ -34,6 +34,19 @@ function Command.Create(type, name, subcommands)
 end
 
 
+-- if the waypoint has been passed in the previous time step with given threshold
+local function has_passed_waypoint(previous_pos, current_pos, waypoint, threshold)
+	local dir = vector.subtract(current_pos, previous_pos)
+	local q2_p2 = vector.dot(current_pos, current_pos) - vector.dot(previous_pos, previous_pos)
+	local t = (vector.dot(waypoint, dir) - q2_p2 / 2) / (vector.dot(dir, dir))
+	-- clamp t between -0.5 and 0.5
+	t = t < -0.5 and -0.5 or t > 0.5 and 0.5 or t
+	local m = vector.multiply(vector.add(previous_pos, current_pos), 0.5)
+	local closest_point = vector.add(m, vector.multiply(dir, t))
+	return vector.distance(closest_point, waypoint) < threshold
+end
+
+
 local function is_near(self, pos, distance)
 	local p = self.object:getpos()
 	-- p.y = p.y + 0.5
@@ -46,6 +59,7 @@ function CreateMoveCommand(target_pos, close_is_enough)
 	local target_pos = vector.new(target_pos.x, target_pos.y, target_pos.z)
 	local path = nil
 	local last_diff = 10000000
+	local last_pos = nil
 	local stall = 0
 	command.completed = function (weld_all_entity)
 		return #path == 0
@@ -68,9 +82,10 @@ function CreateMoveCommand(target_pos, close_is_enough)
 			end
 		end
 		if path and #path > 0 then
-			local pos_diff = vector.distance(weld_all_entity.object:get_pos(), path[1])
+			local current_pos = weld_all_entity.object:get_pos()
+			local pos_diff = vector.distance(current_pos, path[1])
 			minetest.debug("follow_path pos_diff: " .. dump(pos_diff))
-			if pos_diff < 0.05 then
+			if pos_diff < 0.05 or (last_pos and has_passed_waypoint(last_pos, current_pos, path[1], 0.05)) then
 				table.remove(path, 1)
 				last_diff = 10000000
 				stall = 0
@@ -95,6 +110,7 @@ function CreateMoveCommand(target_pos, close_is_enough)
 				stall = 0
 				last_diff = pos_diff
 			end
+			last_pos = current_pos
 		end
 	end
 	return command
@@ -113,18 +129,22 @@ function CreateRemoteControlCommand(plate_user)
 		local multiplier = 0
 		if controls.up then multiplier = 1 end
 		if controls.down then multiplier = multiplier - 1 end
+		--if controls.jump then multiplier = 1 end
+		--if controls.sneak then multiplier = multiplier - 1 end
 		if multiplier ~= 0 then
 			weld_all_entity:change_local_dir(vector.multiply(plate_user:get_look_dir(), multiplier))
 		else
-			weld_all_entity.object:setvelocity{x = 0, y = 0, z = 0}
+			weld_all_entity.object:set_velocity{x = 0, y = 0, z = 0}
 		end
 	end
 	return command
 end
 
-function CreatePrecisionMoveCommand(target_pos)
+-- otionally, provide a face_dir
+function CreatePrecisionMoveCommand(target_pos, face_dir)
 	local command = Command.Create(Command.Types.PrecisionMove, "PrecisionMove")
 	local target_pos = target_pos
+	local face_dir = face_dir
 	local has_reached_target_pos = false
 	command.completed = function (weld_all_entity)
 		return has_reached_target_pos
@@ -134,7 +154,11 @@ function CreatePrecisionMoveCommand(target_pos)
 			weld_all_entity:stop_movement()
 			has_reached_target_pos = true
 		elseif not has_reached_target_pos then -- else next step, follow next path.
-			weld_all_entity:change_direction(target_pos)
+			if face_dir then
+				weld_all_entity:set_move_dir_and_face_dir(vector.subtract(target_pos, weld_all_entity.object:get_pos()), face_dir)
+			else
+				weld_all_entity:change_direction(target_pos)
+			end
 		end
 	end
 	return command
@@ -157,7 +181,7 @@ function CreateOpenDoorCommand(target_pos)
 end
 
 function CreateCloseDoorCommand(target_pos)
-	local command = Command.Create(Command.Types.OpenDoor, "OpenDoor")
+	local command = Command.Create(Command.Types.CloseDoor, "CloseDoor")
 	local target_pos = target_pos
 	command.completed = function ()
 		return true
@@ -202,8 +226,14 @@ function CreatePlaceCommand(target_pos, node, should_place_on)
 	end
 	command.on_step = function (weld_all_entity)
 		if is_near(weld_all_entity, target_pos, 2) and (not should_place_on or should_place_on(target_pos)) then
-			weld_all_entity:place(target_pos, node)
-			minetest.debug("PlaceObjectCommand: placed " .. node.name)
+			local inv = weld_all_entity:get_inventory()		
+			local stack = inv:remove_item("main", node)
+			if stack:get_count() == 1 then
+				weld_all_entity:place(target_pos, node)
+				minetest.debug("PlaceObjectCommand: placed " .. node.name)
+			else
+				minetest.debug("PlaceObjectCommand: node " .. node.name .. " not in inventory!")
+			end
 		elseif should_place_on and not should_place_on(target_pos) then
 			minetest.debug("PlaceObjectCommand: skip placement.")
 		else
@@ -235,7 +265,7 @@ local function scan(scan_center, preferred_z)
 		mining_needed[dx] = {}
 		for dz = -2, 2 do
 			local name = minetest.get_node(vector.offset(scan_center, dx, 0, dz)).name
-			mining_needed[dx][dz] = name == "moonrealm:ironore"
+			mining_needed[dx][dz] = name == "omg_moonrealm:ironore"
 		end
 	end
 	-- need to get rid of the stone between us and the ore
@@ -283,38 +313,55 @@ local function place_on_air_or_vacuum(target_pos)
 end
 
 -- Puts a stone on the side to be able to move down
+-- preferred_z - if mining in z direction is preferred - this means blocks should be placed at the opposite direction
 function CreateFixSidesCommand(mine_center, preferred_z)
 	local commands = {}
 	if preferred_z then
 		commands = {
-			CreatePlaceCommand(vector.offset(mine_center, 0, 0, 1), { name = "moonrealm:stone" }, place_on_air_or_vacuum),
-			CreatePlaceCommand(vector.offset(mine_center, 0, 0, -1), { name = "moonrealm:stone" }, place_on_air_or_vacuum)
+			CreatePlaceCommand(vector.offset(mine_center, 1, 0, 0), { name = "omg_moonrealm:stone" }, place_on_air_or_vacuum),
+			CreatePlaceCommand(vector.offset(mine_center, -1, 0, 0), { name = "omg_moonrealm:stone" }, place_on_air_or_vacuum)
 		}
 	else
 		commands = {
-			CreatePlaceCommand(vector.offset(mine_center, 1, 0, 0), { name = "moonrealm:stone" }, place_on_air_or_vacuum),
-			CreatePlaceCommand(vector.offset(mine_center, -1, 0, 0), { name = "moonrealm:stone" }, place_on_air_or_vacuum)
+			CreatePlaceCommand(vector.offset(mine_center, 0, 0, 1), { name = "omg_moonrealm:stone" }, place_on_air_or_vacuum),
+			CreatePlaceCommand(vector.offset(mine_center, 0, 0, -1), { name = "omg_moonrealm:stone" }, place_on_air_or_vacuum)
 		}
 	end
 	return Command.Create(Command.Types.Combined, "FixSidesCommand", commands)
 end
 
 
-function CreateMineNextLayerCommand(mine_center, preferred_z)
-	minetest.debug("mining: " .. dump(mine_center))
+function CreateMineNextLayerCommand(mine_center, bot_forward_dir)
+	-- if mining in z direction is preferred
+	local preferred_z = bot_forward_dir.z ~= 0
 	local commands = {
 		CreateMiningCommand(mine_center),
 		CreateScanAndMineCommand(mine_center, preferred_z),
 		CreateFixSidesCommand(mine_center, preferred_z),
-		CreatePrecisionMoveCommand(mine_center)
+		CreatePrecisionMoveCommand(mine_center, bot_forward_dir)
 	}
 	return Command.Create(Command.Types.Combined, "MineNextLayerCommand", commands)
+end
+
+function CreateSetRotationCommand(forward_dir)
+	local command = Command.Create(Command.Types.PrecisionMove, "SetRotationCommand")
+	local forward_dir = forward_dir
+	local has_reached_forward_dir = false
+	command.completed = function (weld_all_entity)
+		return has_reached_forward_dir
+	end
+	command.on_step = function (weld_all_entity)
+		weld_all_entity:set_yaw_by_direction(forward_dir)
+		has_reached_forward_dir = true
+	end
+	return command
 end
 
 
 -- mines along a tunnel leading straight down
 -- allows to scan the area around for minerals
-function CreateDigMineCommand(target_pos, depth, preferred_z)
+function CreateDigMineCommand(target_pos, depth, bot_forward_dir)
+	minetest.debug("CreateDigMineCommand: " .. dump(bot_forward_dir))
 	local command = Command.Create(Command.Types.Combined, "DigMineCommand")
 	local target_pos = target_pos
 	local depth = depth
@@ -330,10 +377,10 @@ function CreateDigMineCommand(target_pos, depth, preferred_z)
 		if state == 0 and not inner_command then
 			inner_command = CreateEnterMineCommmand(target_pos)
 		elseif state == 1 and not inner_command then
-			current_depth = 1
-			state = 5
-		elseif state > 1 and current_depth < depth and not inner_command then
-			inner_command = CreateMineNextLayerCommand(vector.offset(target_pos, 0, -(current_depth + 1), 0), preferred_z)
+			current_depth = 0
+			inner_command = CreateSetRotationCommand(bot_forward_dir)
+		elseif state >= 2 and current_depth < depth and not inner_command then
+			inner_command = CreateMineNextLayerCommand(vector.offset(target_pos, 0, -(current_depth + 1), 0), bot_forward_dir)
 		end
 		if inner_command then
 			inner_command.on_step(weld_all_entity)
@@ -371,7 +418,7 @@ function CreateDumpAllCommand(target_zone)
 			if vector.distance(weld_all_entity.object:get_pos(), target_pos) > 2 or max_manhattan_component(weld_all_entity.object:get_pos(), target_pos) < 0.7 then
 				inner_command = CreateMoveCommand(target_pos, true)
 			else
-				inner_command = CreatePlaceCommand(target_pos, {name="default:sand"})
+				inner_command = CreatePlaceCommand(target_pos, {name="omg_moonrealm:stone"})
 			end
 		end
 
@@ -385,4 +432,17 @@ function CreateDumpAllCommand(target_zone)
 		end
 	end
 	return command
+end
+
+
+-- target_pos is the exit trapdoor
+function CreateLeaveMineCommand(target_pos, preferred_z)
+	local target_pos = target_pos
+	local commands = {}
+	table.insert(commands, CreatePrecisionMoveCommand(vector.offset(target_pos, 0, -1, 0)))
+	table.insert(commands, CreateOpenDoorCommand(target_pos))
+	table.insert(commands, CreatePrecisionMoveCommand(vector.offset(target_pos, 0, -.1, 0)))
+	table.insert(commands, CreatePrecisionMoveCommand(vector.subtract(target_pos, vector.new(1, 0, 0))))
+	table.insert(commands, CreateCloseDoorCommand(target_pos))
+	return Command.Create(Command.Types.Combined, "LeaveMineCommmand", commands)
 end

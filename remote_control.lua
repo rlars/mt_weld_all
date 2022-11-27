@@ -18,6 +18,14 @@ local function find_mine_entrance(pos)
 end
 
 
+local function get_trapdoor_direction(pos)
+	if not is_entrance_node(pos) then
+		minetest.debug("Could not determine trapdoor direction!")
+	end
+	return minetest.facedir_to_dir(minetest.get_node(pos).param2)
+end
+
+
 local function use_tool(_, user, pointed_thing)
     	local target_pos = nil
 
@@ -26,7 +34,12 @@ local function use_tool(_, user, pointed_thing)
 		if selected_obj then
 			if is_entrance_node(pointed_thing.under) then
 				minetest.debug("going to entrance: " .. dump(pointed_thing.under))
-				selected_obj:set_commands({CreateMoveCommand(vector.add(target_pos, vector.new(1, 0, 0)), true), CreateDigMineCommand(pointed_thing.under, 12)})
+				local bot_forward_dir = get_trapdoor_direction(pointed_thing.under)
+				selected_obj:set_commands({
+					CreateMoveCommand(vector.subtract(pointed_thing.under, bot_forward_dir)),
+					CreateDigMineCommand(pointed_thing.under, 12, bot_forward_dir),
+					CreateLeaveMineCommand(pointed_thing.under)
+				})
 				selected_obj = nil
 			elseif MinMaxArea.find_area_in_list(zones.dropsites, target_pos) then
 				local zone = MinMaxArea.find_area_in_list(zones.dropsites, target_pos)
@@ -55,7 +68,7 @@ local function use_tool(_, user, pointed_thing)
 				minetest.debug("create mine")
 				selected_obj:set_commands({
 					-- todo: space must be free there!
-					CreateMoveCommand(vector.add(target_pos, vector.new(1, 0, 0))),
+					CreateMoveCommand(vector.add(target_pos, get_trapdoor_direction(target_pos))),
 					CreateDigMineCommand(target_pos, 6)})
 				selected_obj = nil
 			else
@@ -64,19 +77,16 @@ local function use_tool(_, user, pointed_thing)
 				selected_obj = nil
 			end
 		else
-			minetest.add_entity(target_pos, "weld_all_bot:weld_all_bot")
-			local inv = create_inventory("my_test_inv")
-			inv:set_size("main", 32)
-			local time = os.date("!*t")
-			minetest.debug("born on " .. time.year .. time.month .. time.day .. "_" .. time.hour .. time.min .. time.sec)
-			--inv:set_width("main",8)
+			local new_obj = minetest.add_entity(target_pos, "weld_all_bot:weld_all_bot")
+			local weld_all_entity = new_obj:get_luaentity()
+			weld_all_entity:init_after_spawn(user)
 		end
 
 	elseif pointed_thing.type == "object" then
 		local obj = pointed_thing.ref:get_luaentity()
 		if obj and obj.set_commands then
 			if selected_obj then
-				show_inventory(user:get_player_name(), "my_test_inv")
+				show_inventory(user:get_player_name(), obj:get_inventory_name())
 			else
 				minetest.debug("selected")
 				selected_obj = obj
