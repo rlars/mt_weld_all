@@ -76,10 +76,6 @@ local function use_tool(_, user, pointed_thing)
 				selected_obj:set_commands({CreateMoveCommand(target_pos)})
 				selected_obj = nil
 			end
-		else
-			local new_obj = minetest.add_entity(target_pos, "weld_all_bot:weld_all_bot")
-			local weld_all_entity = new_obj:get_luaentity()
-			weld_all_entity:init_after_spawn(user)
 		end
 
 	elseif pointed_thing.type == "object" then
@@ -105,3 +101,37 @@ minetest.register_craftitem("weld_all_bot:remote_control", {
 	on_place = use_tool
 
 })
+
+local function check_wielded_item(player, dtime)
+	local item = player:get_wielded_item()
+	local rc_context = datastore.get_or_create_table(player, "weld_all_rc")
+    if item:get_name() == "weld_all_bot:remote_control" then
+		if not rc_context.using_rc then
+			local zones_hud = datastore.get_or_create_table(player, "zones_hud")
+			if not zones_hud.hud then
+				zones_hud.hud = Hud.Create()
+			end
+			local theHud = zones_hud.hud
+			local bots = {}
+			for _, object in ipairs(minetest.get_objects_inside_radius(player:get_pos(), 100)) do
+				local entity = object.get_luaentity and object:get_luaentity()
+				if entity and entity._owning_player_name and entity._owning_player_name == player:get_player_name() then
+					table.insert(bots, HudPoint.Create(object:get_pos(), "weld_all_bot_remote_control.png"))
+				end
+			end
+			Hud.add_hud_points(theHud, player, bots)
+			rc_context.using_rc = true
+		end
+	else
+		if rc_context.using_rc then
+			local zones_hud = datastore.get_or_create_table(player, "zones_hud")
+			if not zones_hud.hud then
+				zones_hud.hud = Hud.Create()
+			end
+			local theHud = zones_hud.hud
+			Hud.remove_all(theHud, player)
+			rc_context.using_rc = false
+		end
+	end
+end
+GlobalStepCallback.register_globalstep_per_player("check_wielded_item", check_wielded_item)

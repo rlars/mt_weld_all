@@ -31,6 +31,7 @@ WeldAllEntity = {
 	},
 	_owning_player_name = nil,
 	commands = {},
+	jumping = false,
 	on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
 		self.object:remove()
 	end,
@@ -39,13 +40,11 @@ WeldAllEntity = {
 		if not state then return end
 		self._name = state.name
 		self._owning_player_name = state.owning_player_name
-		minetest.debug("loaded bot " .. dump(self._name))
 		if state.name and state.serialized_inventory then
 			self:get_or_create_inventory():set_list("main", deserialize_inventory_list(state.serialized_inventory))
 		end
 	end,
 	get_staticdata = function(self)
-		minetest.debug("saving bot " .. dump(self._name))
 		if self._name then
 			local inv = {}
 			if self:get_inventory() then
@@ -80,7 +79,6 @@ function WeldAllEntity.init_after_spawn(self, user)
 	
 	local inv = create_inventory(self:get_inventory_name())
 	inv:set_size("main", 6)
-	minetest.debug("weld_all_bot spawned as " .. self._name)
 	--inv:set_width("main",8)
 end
 
@@ -133,7 +131,6 @@ end
 
 
 function show_inventory(playername, unique_name)
-	minetest.debug("showing inv " .. unique_name)
 	minetest.show_formspec(playername, "weld_all_bot:" .. unique_name, 
 	"size[8,9]"..
 	"style_type[list;noclip=false;size=1.0,1.0;spacing=0.25,0.25]"..
@@ -163,12 +160,14 @@ end
 
 
 function WeldAllEntity.set_yaw_by_direction(self, direction)
+	if self.jumping then return end
 	self.object:setyaw(math.atan2(direction.z, direction.x))
 end
 
 
 -- change direction to destination and velocity vector.
 function WeldAllEntity.change_direction(self, destination, forward_speed)
+	if self.jumping then return end
 	local position = self.object:getpos()
 	local direction = vector.subtract(destination, position)
 	--direction.y = 0
@@ -184,6 +183,7 @@ end
 
 -- turn according to a vector in local coordinates
 function WeldAllEntity.change_local_dir(self, dir, forward_speed)
+	if self.jumping then return end
 	dir.y = 0
 	if not forward_speed then forward_speed = 1.5 end
 	local velocity = vector.multiply(vector.normalize(dir), 1.5)
@@ -196,12 +196,34 @@ end
 -- move in direction move_dir while facing given face_dir
 -- does not turn if no face_dir is given
 function WeldAllEntity.set_move_dir_and_face_dir(self, move_dir, face_dir)
+	if self.jumping then return end
 	if face_dir then
 		self:set_yaw_by_direction(face_dir)
 	end
 	local speed = 1.5
 	local velocity = vector.multiply(vector.normalize(move_dir), speed)
 	self.object:set_velocity(velocity)
+end
+
+
+-- initiates a jump, entity can´t change direction while in the air
+function WeldAllEntity.jump(self, speed)
+	if self.jumping then return end
+	minetest.debug("jumping!")
+	self:set_yaw_by_direction(speed)
+	self.object:set_velocity(speed)
+	self.jumping = true
+	--self.object:set_acceleration(get_gravity())
+end
+
+
+function WeldAllEntity.jump_or_go_to(self, target_pos, speed_multiplier)
+	local current_pos = self.object:get_pos()
+	if target_pos.y > current_pos.y + 0.4 then
+		self:jump(vector.subtract(target_pos, current_pos))
+	else -- else next step, follow next path.
+		self:change_direction(target_pos, speed_multiplier)
+	end
 end
 
 
@@ -302,7 +324,7 @@ function WeldAllEntity.interact_with_door(self, pos, do_open)
 	local node = minetest.get_node(pos)
 	local nod = minetest.registered_nodes[node.name]
 	if not is_entrance_node(pos) then
-		minetest.debug("not an entrance: " .. node.name)
+		minetest.log("info", "not an entrance: " .. node.name)
 	end
 	if is_trapdoor_open(pos) ~= do_open then
 		--nod.on_rightclick(pos, nod, nil, nil, nil)
@@ -374,8 +396,8 @@ end
 function WeldAllEntity.has_left_right_support(self)
 	local right_node_name = minetest.get_node(self:get_right_node_pos()).name
 	local left_node_name = minetest.get_node(self:get_left_node_pos()).name
-	return right_node_name.name ~= "air" and right_node_name.name ~= "vacuum:vacuum" and
-		left_node_name.name ~= "air" and left_node_name.name ~= "vacuum:vacuum"
+	return right_node_name ~= "air" and right_node_name ~= "vacuum:vacuum" and
+		left_node_name ~= "air" and left_node_name ~= "vacuum:vacuum"
 end
 
 
@@ -384,6 +406,10 @@ function WeldAllEntity.on_step(self, dtime, moveresult)
 
 	if not current_command then return end
 	--minetest.debug("colliding: " .. dump(moveresult.collides ))
+	--minetest.debug("jumping: " .. dump(self.jumping) .. " at height " .. self.object:get_pos().y)
+	if moveresult.touching_ground then
+		self.jumping = false
+	end
 
 	if not current_command.initialized then
 		current_command.initialized = true
@@ -397,9 +423,11 @@ function WeldAllEntity.on_step(self, dtime, moveresult)
 	end
 	
 	if self:has_left_right_support() then
+		minetest.debug("unset gravity accel")
 		self.object:set_acceleration(vector.new(0, 0, 0))
 	else
-		self.object:set_acceleration(vector.new(0, -9, 0))
+		minetest.debug("set gravity accel")
+		self.object:set_acceleration(get_gravity())
 	end
 end
 
@@ -421,3 +449,46 @@ end
 
 
 minetest.register_entity("weld_all_bot:weld_all_bot", WeldAllEntity)
+
+
+local function spawn_bot_at_pos(user, pos)
+	local new_obj = minetest.add_entity(pos, "weld_all_bot:weld_all_bot")
+	local weld_all_entity = new_obj:get_luaentity()
+	weld_all_entity:init_after_spawn(user)
+	return weld_all_entity
+end
+
+
+local function use_bot_spawner(itemstack, user, pointed_thing)
+	if pointed_thing.type == "node" then
+		target_pos = pointed_thing.above
+		spawn_bot_at_pos(user, target_pos)
+		itemstack:set_count(itemstack:get_count() - 1)
+		return itemstack
+	end
+end
+
+minetest.register_craftitem("weld_all_bot:weld_all_bot_placer", {
+	description = "Spawn a bot",
+	inventory_image = "weld_all_bot_back.png",
+	--on_use = use_tool,
+	--on_secondary_use = use_tool,
+	on_place = use_bot_spawner
+
+})
+
+
+minetest.register_node("weld_all_bot:weld_all_bot_boxed", {
+    description = "Weld All bot packed in a box",
+    tiles = {"weld_all_bot_box_top.png", "weld_all_bot_box_top.png", "weld_all_bot_box_right.png", "weld_all_bot_box_left.png", "weld_all_bot_box_front.png", "weld_all_bot_box_front.png"},
+    is_ground_content = false,
+    groups = {dig_immediate = 3},
+    paramtype2 = "facedir",
+	on_dig = function(pos, node, digger)
+		local dir = vector.subtract(vector.new(), minetest.facedir_to_dir(node.param2))
+		minetest.remove_node(pos)
+		local weld_all_entity = spawn_bot_at_pos(digger, pos)
+		weld_all_entity:set_yaw_by_direction(dir)
+		return true
+	end
+})

@@ -1,12 +1,14 @@
 
 Command = {}
 Command.Types = {
+	Stop = 0,
 	Move = 1,
 	PrecisionMove = 2,
-	OpenDoor = 3,
-	CloseDoor = 4,
-	Mining = 5,
-	PlaceObject = 6,
+	Jump = 3,
+	Mining = 16,
+	PlaceObject = 32,
+	OpenDoor = 62,
+	CloseDoor = 63,
 	RemoteControl = 128,
 	Combined = 256,
 }
@@ -19,10 +21,10 @@ function Command.Create(type, name, subcommands)
 			local current_command = subcommands[1]
 			current_command.on_step(weld_all_entity)
 			if current_command.completed(weld_all_entity) then
-				minetest.debug(name .. " completed subcommand " .. current_command.name)
+				minetest.log("verbose", name .. " completed subcommand " .. current_command.name)
 				table.remove(subcommands, 1)
 				if #subcommands > 0 then
-					minetest.debug(name .. " next subcommand " .. subcommands[1].name)
+					minetest.log("verbose", name .. " next subcommand " .. subcommands[1].name)
 				end
 			end
 		end,
@@ -54,6 +56,16 @@ local function is_near(self, pos, distance)
 end
 
 
+local function create_inner_move_command(weld_all_entity, target_pos, speed_multiplier)
+	local current_pos = weld_all_entity.object:get_pos()
+	if target_pos.y > current_pos.y + 0.4 then
+		return CreateJumpCommand(target_pos)
+	else
+		return CreatePrecisionMoveCommand(target_pos, speed_multiplier)
+	end
+end
+
+
 function CreateMoveCommand(target_pos, close_is_enough)
 	local command = Command.Create(Command.Types.Move, "Move")
 	local target_pos = vector.new(target_pos.x, target_pos.y, target_pos.z)
@@ -61,6 +73,7 @@ function CreateMoveCommand(target_pos, close_is_enough)
 	local last_diff = 10000000
 	local last_pos = nil
 	local stall = 0
+	local inner_command = nil
 	command.completed = function (weld_all_entity)
 		return #path == 0
 	end
@@ -71,44 +84,41 @@ function CreateMoveCommand(target_pos, close_is_enough)
 			else
 				path = weld_all_entity:find_path(target_pos)
 			end
-			if path and #path > 0 then
-				if path[1].y < weld_all_entity.object:get_pos().y then
-					weld_all_entity:change_direction(path[1])
-				else
-					weld_all_entity:change_direction(path[1])
-				end
-			else
+			if not path then
 				path = {}
 			end
 		end
 		if path and #path > 0 then
 			local current_pos = weld_all_entity.object:get_pos()
 			local pos_diff = vector.distance(current_pos, path[1])
-			minetest.debug("follow_path pos_diff: " .. dump(pos_diff))
 			if pos_diff < 0.05 or (last_pos and has_passed_waypoint(last_pos, current_pos, path[1], 0.05)) then
 				table.remove(path, 1)
 				last_diff = 10000000
 				stall = 0
 
-				minetest.debug("follow_path: " .. #path)
 				if #path == 0 then -- end of path
 					weld_all_entity:stop_movement()
-				else -- else next step, follow next path.
-					weld_all_entity:change_direction(path[1])
+				else
+					inner_command = create_inner_move_command(weld_all_entity, path[1])
 				end
 			elseif pos_diff > last_diff + 0.05 then
-				minetest.debug("follow_path: " .. last_diff .. " vs " .. pos_diff)
-				weld_all_entity:change_direction(path[1], 0.5)
+				inner_command = create_inner_move_command(weld_all_entity, path[1], 0.5)
 				last_diff = pos_diff
 			elseif pos_diff > last_diff - 0.00001 then
 				stall = stall + 1
 				if stall > 5 then
-					weld_all_entity:change_direction(path[1])
+					inner_command = create_inner_move_command(weld_all_entity, path[1])
 					stall = 0
 				end
 			else
 				stall = 0
 				last_diff = pos_diff
+			end
+			if inner_command then
+				inner_command.on_step(weld_all_entity)
+				if inner_command.completed(weld_all_entity) then
+					inner_command = nil
+				end
 			end
 			last_pos = current_pos
 		end
@@ -140,6 +150,89 @@ function CreateRemoteControlCommand(plate_user)
 	return command
 end
 
+
+function CreateStopCommand()
+	local command = Command.Create(Command.Types.Stop, "Stop")
+	local was_executed = false
+	command.completed = function (weld_all_entity)
+		return was_executed
+	end
+	command.on_step = function (weld_all_entity)
+		weld_all_entity:stop_movement()
+		was_executed = true
+	end
+	return command
+end
+
+
+-- calculate the vertical speed needed to jump to the given height
+local function calc_jump_speed(desired_height, gravity)
+	return math.sqrt(-2 * gravity * desired_height)
+end
+
+
+-- calculate the forward speed needed to not get stuck at the node side
+-- horizontal distance is the minimum distance to the side of the blocking (front) node
+local function calc_max_forward_speed(height, speed, gravity, horizontal_distance)
+	local time_to_height = (-speed + math.sqrt(speed*speed + 2 * gravity * height)) / gravity
+	return horizontal_distance / time_to_height
+end
+
+
+-- estimates the minimum distance to a wall in the given direction
+local function distance_to_wall(pos, dir, collisionbox)
+	if math.abs(dir.z) > math.abs(dir.x) then
+		local _, fracz = math.modf(pos.z + .5)
+		if dir.z > 0 then
+			return 1 - (fracz + collisionbox[6])
+		else
+			return fracz + collisionbox[3]
+		end
+	else
+		local _, fracx = math.modf(pos.x + .5)
+		if dir.x > 0 then
+			return 1 - (fracx + collisionbox[4])
+		else
+			return fracx + collisionbox[1]
+		end
+	end
+end
+
+
+function CreateJumpCommand(target_pos)
+	local command = Command.Create(Command.Types.Jump, "Jump")
+	local target_pos = target_pos
+	local has_jumped = false
+	local has_reached_target_pos = false
+	command.completed = function (weld_all_entity)
+		return has_reached_target_pos
+	end
+	command.on_step = function (weld_all_entity)
+		if is_near(weld_all_entity, target_pos, 0.05) then
+			has_reached_target_pos = true
+		elseif not has_reached_target_pos then
+			local current_pos = weld_all_entity.object:get_pos()
+			local must_jump = target_pos.y > current_pos.y + 0.001
+			if must_jump and not has_jumped then
+				local pos_diff = vector.subtract(target_pos, current_pos)
+				local dir_2d = vector.normalize(vector.new(pos_diff.x, 0, pos_diff.z))
+				local jump_vertical_speed = calc_jump_speed(1, get_gravity().y)
+				local horizontal_distance = distance_to_wall(current_pos, dir_2d, weld_all_entity.initial_properties.collisionbox)
+				local forward_speed = calc_max_forward_speed(1, jump_vertical_speed, get_gravity().y, horizontal_distance)
+				minetest.debug("jump_vertical_speed: " .. jump_vertical_speed)
+				minetest.debug("horizontal_distance: " .. horizontal_distance)
+				weld_all_entity:jump(vector.add(vector.new(0, 1.1 * jump_vertical_speed, 0), vector.multiply(dir_2d, forward_speed * 0.8)))
+				has_jumped = true
+			else
+				minetest.debug("change_direction, jumping: " .. dump(weld_all_entity.jumping))
+				weld_all_entity:change_direction(target_pos)
+			end
+		end
+	end
+	return command
+end
+
+
 -- otionally, provide a face_dir
 function CreatePrecisionMoveCommand(target_pos, face_dir)
 	local command = Command.Create(Command.Types.PrecisionMove, "PrecisionMove")
@@ -153,7 +246,7 @@ function CreatePrecisionMoveCommand(target_pos, face_dir)
 		if is_near(weld_all_entity, target_pos, 0.05) then
 			weld_all_entity:stop_movement()
 			has_reached_target_pos = true
-		elseif not has_reached_target_pos then -- else next step, follow next path.
+		elseif not has_reached_target_pos then
 			if face_dir then
 				weld_all_entity:set_move_dir_and_face_dir(vector.subtract(target_pos, weld_all_entity.object:get_pos()), face_dir)
 			else
@@ -174,7 +267,7 @@ function CreateOpenDoorCommand(target_pos)
 		if is_near(weld_all_entity, target_pos, 2) then
 			weld_all_entity:interact_with_door(target_pos, true)
 		else
-			minetest.debug("OpenDoorCommand: cannot interact, target too far away!")
+			minetest.log("info", "OpenDoorCommand: cannot interact, target too far away!")
 		end
 	end
 	return command
@@ -190,7 +283,7 @@ function CreateCloseDoorCommand(target_pos)
 		if is_near(weld_all_entity, target_pos, 2) then
 			weld_all_entity:interact_with_door(target_pos, false)
 		else
-			minetest.debug("CloseDoorCommand: cannot interact, target too far away!")
+			minetest.log("info", "CloseDoorCommand: cannot interact, target too far away!")
 		end
 	end
 	return command
@@ -207,7 +300,7 @@ function CreateMiningCommand(target_pos)
 		if is_near(weld_all_entity, target_pos, 2.9) then
 			weld_all_entity:mine(target_pos)
 		else
-			minetest.debug("MiningCommand: cannot mine, target too far away!")
+			minetest.log("info", "MiningCommand: cannot mine, target too far away!")
 		end
 		has_interacted = true
 	end
@@ -230,14 +323,14 @@ function CreatePlaceCommand(target_pos, node, should_place_on)
 			local stack = inv:remove_item("main", node)
 			if stack:get_count() == 1 then
 				weld_all_entity:place(target_pos, node)
-				minetest.debug("PlaceObjectCommand: placed " .. node.name)
+				minetest.log("info", "PlaceObjectCommand: placed " .. node.name)
 			else
-				minetest.debug("PlaceObjectCommand: node " .. node.name .. " not in inventory!")
+				minetest.log("info", "PlaceObjectCommand: node " .. node.name .. " not in inventory!")
 			end
 		elseif should_place_on and not should_place_on(target_pos) then
-			minetest.debug("PlaceObjectCommand: skip placement.")
+			minetest.log("info", "PlaceObjectCommand: skip placement.")
 		else
-			minetest.debug("PlaceObjectCommand: cannot place object, target too far away!")
+			minetest.log("info", "PlaceObjectCommand: cannot place object, target too far away!")
 		end
 		has_interacted = true
 	end
@@ -361,7 +454,6 @@ end
 -- mines along a tunnel leading straight down
 -- allows to scan the area around for minerals
 function CreateDigMineCommand(target_pos, depth, bot_forward_dir)
-	minetest.debug("CreateDigMineCommand: " .. dump(bot_forward_dir))
 	local command = Command.Create(Command.Types.Combined, "DigMineCommand")
 	local target_pos = target_pos
 	local depth = depth
@@ -390,7 +482,7 @@ function CreateDigMineCommand(target_pos, depth, bot_forward_dir)
 				state = state + 1
 			end
 		else
-			minetest.debug("DigMineCommand idle in state: " .. state .. " at depth " .. current_depth .. " of " .. depth)
+			minetest.log("verbose", "DigMineCommand idle in state: " .. state .. " at depth " .. current_depth .. " of " .. depth)
 		end
 	end
 	return command
@@ -423,7 +515,7 @@ function CreateDumpAllCommand(target_zone)
 		end
 
 		if inner_command then
-			minetest.debug("Current command: " .. inner_command.name)
+			minetest.log("verbose", "Current command: " .. inner_command.name)
 			inner_command.on_step(weld_all_entity)
 			if inner_command.completed(weld_all_entity) then
 				inner_command = nil
