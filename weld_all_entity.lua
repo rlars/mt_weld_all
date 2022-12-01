@@ -473,7 +473,8 @@ minetest.register_craftitem("weld_all_bot:weld_all_bot_placer", {
 	inventory_image = "weld_all_bot_back.png",
 	--on_use = use_tool,
 	--on_secondary_use = use_tool,
-	on_place = use_bot_spawner
+	on_place = use_bot_spawner,
+	stack_max = 1,
 
 })
 

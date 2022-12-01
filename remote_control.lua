@@ -102,15 +102,12 @@ minetest.register_craftitem("weld_all_bot:remote_control", {
 
 })
 
-local function check_wielded_item(player, dtime)
+local function is_holding_rc(player, dtime)
 	local item = player:get_wielded_item()
 	local rc_context = datastore.get_or_create_table(player, "weld_all_rc")
     if item:get_name() == "weld_all_bot:remote_control" then
 		if not rc_context.using_rc then
-			local zones_hud = datastore.get_or_create_table(player, "zones_hud")
-			if not zones_hud.hud then
-				zones_hud.hud = Hud.Create()
-			end
+			local zones_hud = datastore.get_table(player, "zones_hud")
 			local theHud = zones_hud.hud
 			local bots = {}
 			for _, object in ipairs(minetest.get_objects_inside_radius(player:get_pos(), 100)) do
@@ -120,18 +117,17 @@ local function check_wielded_item(player, dtime)
 				end
 			end
 			Hud.add_hud_points(theHud, player, bots)
+			zones_hud.bots = bots
 			rc_context.using_rc = true
 		end
 	else
 		if rc_context.using_rc then
-			local zones_hud = datastore.get_or_create_table(player, "zones_hud")
-			if not zones_hud.hud then
-				zones_hud.hud = Hud.Create()
-			end
+			local zones_hud = datastore.get_table(player, "zones_hud")
 			local theHud = zones_hud.hud
-			Hud.remove_all(theHud, player)
+			Hud.remove(theHud, player, zones_hud.bots)
+			zones_hud.bots = {}
 			rc_context.using_rc = false
 		end
 	end
 end
-GlobalStepCallback.register_globalstep_per_player("check_wielded_item", check_wielded_item)
+GlobalStepCallback.register_globalstep_per_player("is_holding_rc", is_holding_rc)
