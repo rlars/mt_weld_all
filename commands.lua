@@ -61,7 +61,7 @@ local function create_inner_move_command(weld_all_entity, target_pos, speed_mult
 	if target_pos.y > current_pos.y + 0.4 then
 		return CreateJumpCommand(target_pos)
 	else
-		return CreatePrecisionMoveCommand(target_pos, speed_multiplier)
+		return CreatePrecisionMoveCommand(target_pos)
 	end
 end
 
@@ -135,7 +135,7 @@ function CreateRemoteControlCommand(plate_user)
 	end
 	command.on_step = function (weld_all_entity)
 		controls = plate_user:get_player_control()
-		weld_all_entity.object:setyaw(plate_user: get_look_horizontal())
+		weld_all_entity.object:setyaw(plate_user: get_look_horizontal() + 3.14 / 2)
 		local multiplier = 0
 		if controls.up then multiplier = 1 end
 		if controls.down then multiplier = multiplier - 1 end

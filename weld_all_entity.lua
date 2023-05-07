@@ -461,7 +461,7 @@ end
 
 local function use_bot_spawner(itemstack, user, pointed_thing)
 	if pointed_thing.type == "node" then
-		target_pos = pointed_thing.above
+		local target_pos = pointed_thing.above
 		spawn_bot_at_pos(user, target_pos)
 		itemstack:set_count(itemstack:get_count() - 1)
 		return itemstack
