@@ -104,23 +104,34 @@ local function is_holding_rc(player, dtime)
 		if not rc_context.using_rc then
 			local zones_hud = datastore.get_table(player, "zones_hud")
 			local theHud = zones_hud.hud
-			local bots = {}
+			local bots_in_range = {}
+			local bot_hud_points = {}
 			for _, object in ipairs(minetest.get_objects_inside_radius(player:get_pos(), 100)) do
 				local entity = object.get_luaentity and object:get_luaentity()
 				if entity and entity._owning_player_name and entity._owning_player_name == player:get_player_name() then
-					table.insert(bots, HudPoint.Create(object:get_pos(), "weld_all_bot_remote_control.png"))
+					table.insert(bots_in_range, object)
+					table.insert(bot_hud_points, HudPoint.Create(object:get_pos(), "weld_all_bot_remote_control.png"))
 				end
 			end
-			Hud.add_hud_points(theHud, player, bots)
-			zones_hud.bots = bots
+			Hud.add_hud_points(theHud, player, bot_hud_points)
+			zones_hud.bot_hud_points = bot_hud_points
+			rc_context.bots_in_range = bots_in_range
 			rc_context.using_rc = true
+		else
+			local zones_hud = datastore.get_table(player, "zones_hud")
+			for i, object in ipairs(rc_context.bots_in_range) do
+				if object and object.get_pos and object:get_pos() then -- if object is out of range, object:get_pos() might return nil
+					zones_hud.bot_hud_points[i].pos = object:get_pos()
+				end
+			end
+			Hud.update_hud(zones_hud.hud, player, true)
 		end
 	else
 		if rc_context.using_rc then
 			local zones_hud = datastore.get_table(player, "zones_hud")
 			local theHud = zones_hud.hud
-			Hud.remove(theHud, player, zones_hud.bots)
-			zones_hud.bots = {}
+			Hud.remove(theHud, player, zones_hud.bot_hud_points)
+			zones_hud.bot_hud_points = {}
 			rc_context.using_rc = false
 		end
 	end
