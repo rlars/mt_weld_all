@@ -30,13 +30,14 @@ WeldAllEntity = {
 		use_texture_alpha = true,
 	},
 	_owning_player_name = nil,
-	commands = {},
+	tasks = {},
 	jumping = false,
 	on_punch = function(self, puncher, time_from_last_punch, tool_capabilities, dir, damage)
 		self.object:remove()
 	end,
 	on_activate = function(self, staticdata, dtime_s)
 		local state = minetest.deserialize(staticdata, true)
+		self.tasks = {}
 		if not state then return end
 		self._name = state.name
 		self._owning_player_name = state.owning_player_name
@@ -402,24 +403,24 @@ end
 
 
 function WeldAllEntity.on_step(self, dtime, moveresult)
-	local current_command = #self.commands > 0 and self.commands[1] or nil
+	local current_task = #self.tasks > 0 and self.tasks[1] or nil
 
-	if not current_command then return end
+	if not current_task then return end
 	--minetest.debug("colliding: " .. dump(moveresult.collides ))
 	--minetest.debug("jumping: " .. dump(self.jumping) .. " at height " .. self.object:get_pos().y)
 	if moveresult.touching_ground then
 		self.jumping = false
 	end
 
-	if not current_command.initialized then
-		current_command.initialized = true
-		if current_command.type == Command.Types.Combined then
-		end
+	if not current_task.initialized then
+		current_task.initialized = true
+		--if current_task.type == Command.Types.Combined then
+		--end
 	end
 
-	current_command.on_step(self)
-	if current_command.completed(self) then
-		table.remove(self.commands, 1)
+	current_task:on_step(self)
+	if current_task:completed(self) then
+		table.remove(self.tasks, 1)
 	end
 	
 	if self:has_left_right_support() then
@@ -442,9 +443,18 @@ function WeldAllEntity.place(self, pos, node)
 end
 
 
-function WeldAllEntity.set_commands(self, commands)
-	self.path = {}
-	self.commands = commands
+function WeldAllEntity.queue_task(self, task)
+	table.insert(self.tasks, task)
+end
+
+
+function WeldAllEntity.assign_task(self, task)
+	table.insert(self.tasks, 1, task)
+end
+
+
+function WeldAllEntity.get_current_task(self)
+	return self.tasks[1]
 end
 
 

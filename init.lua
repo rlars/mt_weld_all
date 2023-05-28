@@ -11,4 +11,5 @@ end
 dofile(wa_path.."/weld_all_entity.lua");
 dofile(wa_path.."/remote_control.lua");
 dofile(wa_path.."/commands.lua");
+dofile(wa_path.."/task.lua");
 

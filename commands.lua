@@ -98,6 +98,7 @@ function CreateMoveCommand(target_pos, close_is_enough)
 
 				if #path == 0 then -- end of path
 					weld_all_entity:stop_movement()
+					inner_command = nil
 				else
 					inner_command = create_inner_move_command(weld_all_entity, path[1])
 				end
@@ -134,7 +135,7 @@ function CreateRemoteControlCommand(plate_user)
 		return false
 	end
 	command.on_step = function (weld_all_entity)
-		controls = plate_user:get_player_control()
+		local controls = plate_user:get_player_control()
 		weld_all_entity.object:setyaw(plate_user: get_look_horizontal() + 3.14 / 2)
 		local multiplier = 0
 		if controls.up then multiplier = 1 end
@@ -446,82 +447,6 @@ function CreateSetRotationCommand(forward_dir)
 	command.on_step = function (weld_all_entity)
 		weld_all_entity:set_yaw_by_direction(forward_dir)
 		has_reached_forward_dir = true
-	end
-	return command
-end
-
-
--- mines along a tunnel leading straight down
--- allows to scan the area around for minerals
-function CreateDigMineCommand(target_pos, depth, bot_forward_dir)
-	local command = Command.Create(Command.Types.Combined, "DigMineCommand")
-	local target_pos = target_pos
-	local depth = depth
-	-- current depth measured from the entrance
-	local current_depth = 0
-	local state = 0
-	local inner_command = nil
-	command.completed = function ()
-		return not inner_command and current_depth == depth
-	end
-	command.on_step = function (weld_all_entity)
-		--inner_command = CreatePlaceCommand(target_pos, {name="xpanes:trapdoor_steel_bar_open", param1=14, param2=0})
-		if state == 0 and not inner_command then
-			inner_command = CreateEnterMineCommmand(target_pos)
-		elseif state == 1 and not inner_command then
-			current_depth = 0
-			inner_command = CreateSetRotationCommand(bot_forward_dir)
-		elseif state >= 2 and current_depth < depth and not inner_command then
-			inner_command = CreateMineNextLayerCommand(vector.offset(target_pos, 0, -(current_depth + 1), 0), bot_forward_dir)
-		end
-		if inner_command then
-			inner_command.on_step(weld_all_entity)
-			if inner_command.completed(weld_all_entity) then
-				inner_command = nil
-				current_depth = current_depth + 1
-				state = state + 1
-			end
-		else
-			minetest.log("verbose", "DigMineCommand idle in state: " .. state .. " at depth " .. current_depth .. " of " .. depth)
-		end
-	end
-	return command
-end
-
-
-local function max_manhattan_component(a, b)
-	local diff = vector.subtract(a, b)
-	return math.max(math.abs(diff.x), math.abs(diff.y), math.abs(diff.z))
-end
-
-
-function CreateDumpAllCommand(target_zone)
-	local command = Command.Create(Command.Types.Combined, "DumpAllCommand")
-	local target_zone = target_zone
-	local inner_command = nil
-	local current_depth = 0
-	command.completed = function ()
-		return not inner_command and current_depth == 9
-	end
-	command.on_step = function (weld_all_entity)
-		-- init
-		if not inner_command and current_depth < 9 then
-			local target_pos = MinMaxArea.get_lowest_empty(target_zone)
-			if vector.distance(weld_all_entity.object:get_pos(), target_pos) > 2 or max_manhattan_component(weld_all_entity.object:get_pos(), target_pos) < 0.7 then
-				inner_command = CreateMoveCommand(target_pos, true)
-			else
-				inner_command = CreatePlaceCommand(target_pos, {name="omg_moonrealm:stone"})
-			end
-		end
-
-		if inner_command then
-			minetest.log("verbose", "Current command: " .. inner_command.name)
-			inner_command.on_step(weld_all_entity)
-			if inner_command.completed(weld_all_entity) then
-				inner_command = nil
-				current_depth = current_depth + 1
-			end
-		end
 	end
 	return command
 end
