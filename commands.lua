@@ -187,6 +187,7 @@ end
 local function distance_to_wall(pos, dir, collisionbox)
 	if math.abs(dir.z) > math.abs(dir.x) then
 		local _, fracz = math.modf(pos.z + .5)
+		fracz = fracz > 0 and fracz or (1 + fracz)
 		if dir.z > 0 then
 			return 1 - (fracz + collisionbox[6])
 		else
@@ -194,6 +195,7 @@ local function distance_to_wall(pos, dir, collisionbox)
 		end
 	else
 		local _, fracx = math.modf(pos.x + .5)
+		fracx = fracx > 0 and fracx or (1 + fracx)
 		if dir.x > 0 then
 			return 1 - (fracx + collisionbox[4])
 		else
@@ -220,12 +222,9 @@ function JumpCommand:on_step(weld_all_entity)
 			local jump_vertical_speed = calc_jump_speed(1, get_gravity().y)
 			local horizontal_distance = distance_to_wall(current_pos, dir_2d, weld_all_entity.initial_properties.collisionbox)
 			local forward_speed = calc_max_forward_speed(1, jump_vertical_speed, get_gravity().y, horizontal_distance)
-			minetest.debug("jump_vertical_speed: " .. jump_vertical_speed)
-			minetest.debug("horizontal_distance: " .. horizontal_distance)
-			weld_all_entity:jump(vector.add(vector.new(0, 1.1 * jump_vertical_speed, 0), vector.multiply(dir_2d, forward_speed * 0.8)))
+			weld_all_entity:jump(vector.add(vector.new(0, 1.1 * jump_vertical_speed, 0), vector.multiply(dir_2d, forward_speed * 0.98)))
 			self.has_jumped = true
 		else
-			minetest.debug("change_direction, jumping: " .. dump(weld_all_entity.jumping))
 			weld_all_entity:change_direction(self.target_pos)
 		end
 	end
