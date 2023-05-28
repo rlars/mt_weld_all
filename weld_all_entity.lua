@@ -416,7 +416,7 @@ function WeldAllEntity.on_step(self, dtime, moveresult)
 		current_task.initialized = true
 	end
 
-	current_task:on_step(self)
+	current_task:on_step(self, dtime)
 	if current_task:completed(self) then
 		table.remove(self.tasks, 1)
 	end

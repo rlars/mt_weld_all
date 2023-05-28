@@ -81,7 +81,7 @@ end
 function MoveCommand:completed(weld_all_entity)
 	return #self.path == 0
 end
-function MoveCommand:on_step(weld_all_entity)
+function MoveCommand:on_step(weld_all_entity, dtime)
 	if not self.path then
 		if self.close_is_enough then
 			self.path = weld_all_entity:find_path_close(self.target_pos)
@@ -120,7 +120,7 @@ function MoveCommand:on_step(weld_all_entity)
 			self.last_diff = pos_diff
 		end
 		if self.inner_command then
-			self.inner_command:on_step(weld_all_entity)
+			self.inner_command:on_step(weld_all_entity, dtime)
 			if self.inner_command:completed(weld_all_entity) then
 				self.inner_command = nil
 			end
@@ -231,19 +231,40 @@ function JumpCommand:on_step(weld_all_entity)
 end
 CommandFactory.register(JumpCommand)
 
+-- returns an angle in radians "close" to the given angle (less than 180 deg)
+local function dir_to_yaw(dir, compared_angle)
+	local dir_2d = vector.normalize(vector.new(dir.x, 0, dir.z))
+	local angle = math.atan2(dir_2d.z, dir_2d.x)
+	if angle - compared_angle > math.pi then
+		return angle - 2 * math.pi
+	elseif angle - compared_angle < -math.pi then
+		return angle + 2 * math.pi
+	end
+	return angle
+end
 
 PrecisionMoveCommand = Command:new() -- needs target_pos, optionally face_dir
 PrecisionMoveCommand.name = "precision_move"
 function PrecisionMoveCommand:completed(weld_all_entity)
 	return self.has_reached_target_pos
 end
-function PrecisionMoveCommand:on_step(weld_all_entity)
+function PrecisionMoveCommand:on_step(weld_all_entity, dtime)
 	if is_near(weld_all_entity, self.target_pos, 0.05) then
 		weld_all_entity:stop_movement()
 		self.has_reached_target_pos = true
 	elseif not self.has_reached_target_pos then
+		local current_face_dir = weld_all_entity.object:get_yaw()
+		local target_face_dir = dir_to_yaw(vector.subtract(self.target_pos, weld_all_entity.object:get_pos()), current_face_dir)
+		minetest.debug("current_face_dir " .. current_face_dir)
+		minetest.debug("target_face_dir " .. target_face_dir)
 		if self.face_dir then
 			weld_all_entity:set_move_dir_and_face_dir(vector.subtract(self.target_pos, weld_all_entity.object:get_pos()), self.face_dir)
+		elseif math.abs(current_face_dir - target_face_dir) > 0.03 then
+			local last_turn_speed = self.last_turn_speed or 0
+			weld_all_entity:stop_movement()
+			local turn_speed = math.min(6*math.abs(current_face_dir - target_face_dir), 6, 0.5 + last_turn_speed)
+			weld_all_entity.object:set_yaw(current_face_dir + math.sign(target_face_dir - current_face_dir) * turn_speed * dtime)
+			self.last_turn_speed = turn_speed
 		else
 			weld_all_entity:change_direction(self.target_pos)
 		end

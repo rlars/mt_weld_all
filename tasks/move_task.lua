@@ -16,9 +16,9 @@ function MoveTask:completed()
     return self.command:completed()
 end
 
-function MoveTask:on_step(weld_all_entity)
+function MoveTask:on_step(weld_all_entity, dtime)
     if self.command then
-        self.command:on_step(weld_all_entity)
+        self.command:on_step(weld_all_entity, dtime)
     end
     minetest.debug("Command is " .. self.command.name)
 end
