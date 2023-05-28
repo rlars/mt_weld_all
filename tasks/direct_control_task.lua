@@ -6,19 +6,19 @@ DirectControlTask = CommandBasedTask:new()
 function DirectControlTask:new (o)
     o = o or CommandBasedTask:new({})
     o.name = direct_control_task_factory.name
-    o.command = CreateRemoteControlCommand(o.user)
+    o.command = CommandFactory["remote_control"]:new({user = o.user})
     setmetatable(o, self)
     self.__index = self
     return o
 end
 
 function DirectControlTask:completed()
-    return self.command.completed()
+    return self.command:completed()
 end
 
 function DirectControlTask:on_step(weld_all_entity)
     if self.command then
-        self.command.on_step(weld_all_entity)
+        self.command:on_step(weld_all_entity)
     end
 end
 

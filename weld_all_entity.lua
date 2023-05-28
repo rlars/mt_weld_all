@@ -414,8 +414,6 @@ function WeldAllEntity.on_step(self, dtime, moveresult)
 
 	if not current_task.initialized then
 		current_task.initialized = true
-		--if current_task.type == Command.Types.Combined then
-		--end
 	end
 
 	current_task:on_step(self)

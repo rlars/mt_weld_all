@@ -31,9 +31,9 @@ function DumpItemsTask:on_step(weld_all_entity)
             -- no more space in zone
             return
         end
-        
+
         if vector.distance(weld_all_entity.object:get_pos(), target_pos) > 2 or max_manhattan_component(weld_all_entity.object:get_pos(), target_pos) < 0.7 then
-            self.command = CreateMoveCommand(target_pos, true)
+            self.command = CommandFactory["move"]:new({target_pos = target_pos, close_is_enough = true})
         else
             local item_name = nil
             local items = inv:get_list("main")
@@ -43,14 +43,14 @@ function DumpItemsTask:on_step(weld_all_entity)
                 end
             end
             minetest.debug("dump item " .. item_name)
-            self.command = CreatePlaceCommand(target_pos, {name=item_name})
+            self.command = CommandFactory["place"]:new({target_pos = target_pos, node = {name=item_name}})
         end
     end
 
     if self.command then
         minetest.log("verbose", "Current command: " .. self.command.name)
-        self.command.on_step(weld_all_entity)
-        if self.command.completed(weld_all_entity) then
+        self.command:on_step(weld_all_entity)
+        if self.command:completed(weld_all_entity) then
             self.command = nil
         end
     end

@@ -7,12 +7,10 @@ DigMineTask = CommandBasedTask:new()
 function DigMineTask:new (o)
     o = o or CommandBasedTask:new({})
     o.name = dig_mine_task_factory.name
-    minetest.debug("create DigMineTask")
-    minetest.log("info", "Create")
     setmetatable(o, self)
     self.__index = self
     o.current_depth = 0
-    o.state = 0
+    o.state = -1
     return o
 end
 
@@ -22,21 +20,21 @@ end
 
 function DigMineTask:on_step(weld_all_entity) --dtime
     --inner_command = CreatePlaceCommand(target_pos, {name="xpanes:trapdoor_steel_bar_open", param1=14, param2=0})
-    minetest.debug("name " .. self.name)
     minetest.log("info", "DigMineTask state " .. self.state)
     minetest.log("info", "DigMineTask depth " .. self.current_depth)
-    if self.state == 0 and not self.command then
-        --self.command = CreateEnterMineCommmand(target_pos)
-        self.command = CreateMoveCommand(self.target_pos)
+    if self.state == -1 and not self.command then
+        self.command = CommandFactory["move"]:new({target_pos = self.target_pos})
+    elseif self.state == 0 and not self.command then
+        self.command = CommandFactory["enter_mine"]:new({target_pos = self.target_pos})
     elseif self.state == 1 and not self.command then
         self.current_depth = 0
-        self.command = CreateSetRotationCommand(self.bot_forward_dir)
+        self.command = CommandFactory["set_rotation"]:new({forward_dir = self.bot_forward_dir})
     elseif self.state >= 2 and self.current_depth < self.target_depth and not self.command then
-        self.command = CreateMineNextLayerCommand(vector.offset(self.target_pos, 0, -(self.current_depth-1 + 1), 0), self.bot_forward_dir)
+        self.command = CommandFactory["mine_next_layer"]:new({mine_center = vector.offset(self.target_pos, 0, -(self.current_depth-1 + 1), 0), bot_forward_dir = self.bot_forward_dir})
     end
     if self.command then
-        self.command.on_step(weld_all_entity)
-        if self.command.completed(weld_all_entity) then
+        self.command:on_step(weld_all_entity)
+        if self.command:completed(weld_all_entity) then
             self.command = nil
             self.current_depth = self.current_depth + 1
             self.state = self.state + 1
