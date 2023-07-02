@@ -140,7 +140,7 @@ local function is_holding_rc(player, dtime)
 				local entity = object.get_luaentity and object:get_luaentity()
 				if entity and entity._owning_player_name and entity._owning_player_name == player:get_player_name() then
 					table.insert(bots_in_range, object)
-					table.insert(bot_hud_points, HudPoint.Create(object:get_pos(), "([combine:48x48:8,8=weld_all_bot_back.png:^[resize:32x32)"))
+					table.insert(bot_hud_points, HudPoint.new(object:get_pos(), "([combine:48x48:8,8=weld_all_bot_back.png:^[resize:32x32)"))
 				end
 			end
 			Hud.add_hud_points(theHud, player, bot_hud_points)

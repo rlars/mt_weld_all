@@ -28,7 +28,7 @@ function DigMineTask:on_step(weld_all_entity) --dtime
         self.command = CommandFactory["enter_mine"]:new({target_pos = self.target_pos})
     elseif self.state == 1 and not self.command then
         self.current_depth = 0
-        self.command = CommandFactory["set_rotation"]:new({forward_dir = self.bot_forward_dir})
+        self.command = CommandFactory["set_rotation"]:new({target_dir = self.bot_forward_dir})
     elseif self.state >= 2 and self.current_depth < self.target_depth and not self.command then
         self.command = CommandFactory["mine_next_layer"]:new({mine_center = vector.offset(self.target_pos, 0, -(self.current_depth-1 + 1), 0), bot_forward_dir = self.bot_forward_dir})
     end

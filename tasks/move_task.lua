@@ -20,7 +20,6 @@ function MoveTask:on_step(weld_all_entity, dtime)
     if self.command then
         self.command:on_step(weld_all_entity, dtime)
     end
-    minetest.debug("Command is " .. self.command.name)
 end
 
 function move_task_factory.create(target_pos)

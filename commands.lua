@@ -60,12 +60,12 @@ local function is_near(self, pos, distance)
 end
 
 
-local function create_inner_move_command(weld_all_entity, target_pos, speed_multiplier)
+local function create_inner_move_command(weld_all_entity, target_pos, target_dir, speed_multiplier)
 	local current_pos = weld_all_entity.object:get_pos()
 	if target_pos.y > current_pos.y + 0.4 then
-		return CommandFactory["jump"]:new({target_pos = target_pos})
+		return CommandFactory["jump"]:new({target_pos = target_pos, target_dir = target_dir})
 	else
-		return CommandFactory["precision_move"]:new({target_pos = target_pos})
+		return CommandFactory["precision_move"]:new({target_pos = target_pos, target_dir = target_dir})
 	end
 end
 
@@ -95,24 +95,30 @@ function MoveCommand:on_step(weld_all_entity, dtime)
 	if self.path and #self.path > 0 then
 		local current_pos = weld_all_entity.object:get_pos()
 		local pos_diff = vector.distance(current_pos, self.path[1])
+		local target_dir = #self.path > 1 and vector.subtract(self.path[2], self.path[1]) or nil
 		if pos_diff < 0.05 or (self.last_pos and has_passed_waypoint(self.last_pos, current_pos, self.path[1], 0.05)) then
 			table.remove(self.path, 1)
 			self.last_diff = 10000000
 			self.stall = 0
 
+			local current_yaw = weld_all_entity.object:get_yaw()
+
 			if #self.path == 0 then -- end of path
 				weld_all_entity:stop_movement()
 				self.inner_command = nil
+			elseif not MathHelpers.angles_are_close(current_yaw, MathHelpers.dir_to_yaw(vector.subtract(self.path[1], current_pos), current_yaw), 0.01) then
+				local target_dir = vector.subtract(self.path[1], current_pos)
+				self.inner_command = CommandFactory["set_rotation"]:new({target_dir = target_dir})
 			else
-				self.inner_command = create_inner_move_command(weld_all_entity, self.path[1])
+				self.inner_command = create_inner_move_command(weld_all_entity, self.path[1], target_dir)
 			end
 		elseif pos_diff > self.last_diff + 0.05 then
-			self.inner_command = create_inner_move_command(weld_all_entity, self.path[1], 0.5)
+			self.inner_command = create_inner_move_command(weld_all_entity, self.path[1], target_dir, 0.5)
 			self.last_diff = pos_diff
 		elseif pos_diff > self.last_diff - 0.00001 then
 			self.stall = self.stall + 1
-			if self.stall > 5 then
-				self.inner_command = create_inner_move_command(weld_all_entity, self.path[1])
+			if self.stall > 5 and (not self.inner_command or self.inner_command.name ~= "set_rotation") then
+				self.inner_command = create_inner_move_command(weld_all_entity, self.path[1], target_dir)
 				self.stall = 0
 			end
 		else
@@ -140,14 +146,14 @@ function RemoteControlCommand:completed(weld_all_entity)
 end
 function RemoteControlCommand:on_step(weld_all_entity)
 	local controls = self.user:get_player_control()
-	weld_all_entity.object:setyaw(self.user: get_look_horizontal() + 3.14 / 2)
+	weld_all_entity:turn_towards(MathHelpers.closest_yaw(self.user:get_look_horizontal() + 3.14 / 2, weld_all_entity.object:get_yaw()))
 	local multiplier = 0
 	if controls.up then multiplier = 1 end
 	if controls.down then multiplier = multiplier - 1 end
 	--if controls.jump then multiplier = 1 end
 	--if controls.sneak then multiplier = multiplier - 1 end
 	if multiplier ~= 0 then
-		weld_all_entity:change_local_dir(vector.multiply(self.user:get_look_dir(), multiplier))
+		weld_all_entity:step_forward(multiplier)
 	else
 		weld_all_entity.object:set_velocity{x = 0, y = 0, z = 0}
 	end
@@ -224,49 +230,52 @@ function JumpCommand:on_step(weld_all_entity)
 			local forward_speed = calc_max_forward_speed(1, jump_vertical_speed, get_gravity().y, horizontal_distance)
 			weld_all_entity:jump(vector.add(vector.new(0, 1.1 * jump_vertical_speed, 0), vector.multiply(dir_2d, forward_speed * 0.98)))
 			self.has_jumped = true
-		else
-			weld_all_entity:change_direction(self.target_pos)
 		end
 	end
 end
 CommandFactory.register(JumpCommand)
 
--- returns an angle in radians "close" to the given angle (less than 180 deg)
-local function dir_to_yaw(dir, compared_angle)
-	local dir_2d = vector.normalize(vector.new(dir.x, 0, dir.z))
-	local angle = math.atan2(dir_2d.z, dir_2d.x)
-	if angle - compared_angle > math.pi then
-		return angle - 2 * math.pi
-	elseif angle - compared_angle < -math.pi then
-		return angle + 2 * math.pi
-	end
-	return angle
+TurnCommand = Command:new() -- needs target_dir - turn towards target_dir
+TurnCommand.name = "set_rotation"
+function TurnCommand:completed(weld_all_entity)
+	return self.has_reached_target_dir
 end
+function TurnCommand:on_step(weld_all_entity, dtime)
+	local current_face_yaw = weld_all_entity.object:get_yaw()
+	if not self.has_reached_target_dir and self.target_dir then
+		local target_face_yaw = MathHelpers.dir_to_yaw(self.target_dir, current_face_yaw)
+		weld_all_entity:turn_towards(target_face_yaw)
+	end
+	if not self.target_dir or MathHelpers.angles_are_close(current_face_yaw, MathHelpers.dir_to_yaw(self.target_dir, current_face_yaw), 0.03) then
+		weld_all_entity:stop_movement()
+		self.has_reached_target_dir = true
+	end
+end
+CommandFactory.register(TurnCommand)
 
-PrecisionMoveCommand = Command:new() -- needs target_pos, optionally face_dir
+PrecisionMoveCommand = Command:new() -- needs target_pos, optionally target_dir - first turn towards and move forward to target, then turn into target_dir
 PrecisionMoveCommand.name = "precision_move"
 function PrecisionMoveCommand:completed(weld_all_entity)
 	return self.has_reached_target_pos
 end
 function PrecisionMoveCommand:on_step(weld_all_entity, dtime)
-	if is_near(weld_all_entity, self.target_pos, 0.05) then
-		weld_all_entity:stop_movement()
-		self.has_reached_target_pos = true
-	elseif not self.has_reached_target_pos then
-		local current_face_dir = weld_all_entity.object:get_yaw()
-		local target_face_dir = dir_to_yaw(vector.subtract(self.target_pos, weld_all_entity.object:get_pos()), current_face_dir)
-		minetest.debug("current_face_dir " .. current_face_dir)
-		minetest.debug("target_face_dir " .. target_face_dir)
-		if self.face_dir then
-			weld_all_entity:set_move_dir_and_face_dir(vector.subtract(self.target_pos, weld_all_entity.object:get_pos()), self.face_dir)
-		elseif math.abs(current_face_dir - target_face_dir) > 0.03 then
-			local last_turn_speed = self.last_turn_speed or 0
-			weld_all_entity:stop_movement()
-			local turn_speed = math.min(6*math.abs(current_face_dir - target_face_dir), 6, 0.5 + last_turn_speed)
-			weld_all_entity.object:set_yaw(current_face_dir + math.sign(target_face_dir - current_face_dir) * turn_speed * dtime)
-			self.last_turn_speed = turn_speed
+	local current_face_yaw = weld_all_entity.object:get_yaw()
+	local pos_is_near = is_near(weld_all_entity, self.target_pos, 0.05)
+	if not pos_is_near then
+		local target_face_yaw = MathHelpers.dir_to_yaw(vector.subtract(self.target_pos, weld_all_entity.object:get_pos()), current_face_yaw)
+		if MathHelpers.angles_are_close(current_face_yaw, target_face_yaw, 0.01) then
+			weld_all_entity:move_to(self.target_pos)
 		else
-			weld_all_entity:change_direction(self.target_pos)
+			weld_all_entity:turn_towards(target_face_yaw)
+		end
+	else -- pos_is_near
+		if not self.has_reached_target_pos and self.target_dir then
+			local target_face_yaw = MathHelpers.dir_to_yaw(self.target_dir, current_face_yaw)
+			weld_all_entity:turn_towards(target_face_yaw)
+		end
+		if not self.target_dir or MathHelpers.angles_are_close(current_face_yaw, MathHelpers.dir_to_yaw(self.target_dir, current_face_yaw), 0.03) then
+			weld_all_entity:stop_movement()
+			self.has_reached_target_pos = true
 		end
 	end
 end
@@ -468,17 +477,6 @@ function MineNextLayerCommand:new(o)
     return o
 end
 CommandFactory.register(MineNextLayerCommand)
-
-SetRotationCommand = Command:new() -- needs forward_dir
-SetRotationCommand.name = "set_rotation"
-function SetRotationCommand:completed(weld_all_entity)
-	return self.has_reached_forward_dir
-end
-function SetRotationCommand:on_step(weld_all_entity)
-	weld_all_entity:set_yaw_by_direction(self.forward_dir)
-	self.has_reached_forward_dir = true
-end
-CommandFactory.register(SetRotationCommand)
 
 LeaveMineCommand = SequenceCommand:new() -- needs target_pos (the exit trapdoor), optionally preferred_z
 LeaveMineCommand.name = "leave_mine"

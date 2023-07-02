@@ -166,43 +166,12 @@ function WeldAllEntity.set_yaw_by_direction(self, direction)
 end
 
 
--- change direction to destination and velocity vector.
-function WeldAllEntity.change_direction(self, destination, forward_speed)
+function WeldAllEntity.step_forward(self, forward_speed)
 	if self.jumping then return end
-	local position = self.object:getpos()
-	local direction = vector.subtract(destination, position)
-	--direction.y = 0
-	if not forward_speed then forward_speed = 1.5 end
-	local velocity = vector.multiply(vector.normalize(direction), forward_speed)
-	if direction.y > 0.01 then
-		velocity.y = 5
-	end
-  
-	self.object:set_velocity(velocity)
-	self:set_yaw_by_direction(direction)
-end
-
--- turn according to a vector in local coordinates
-function WeldAllEntity.change_local_dir(self, dir, forward_speed)
-	if self.jumping then return end
+	local dir = vector.rotate(vector.new(1, 0, 0), self.object:get_rotation())
 	dir.y = 0
 	if not forward_speed then forward_speed = 1.5 end
-	local velocity = vector.multiply(vector.normalize(dir), 1.5)
-  
-	self.object:set_velocity(velocity)
-	self:set_yaw_by_direction(dir)
-end
-
-
--- move in direction move_dir while facing given face_dir
--- does not turn if no face_dir is given
-function WeldAllEntity.set_move_dir_and_face_dir(self, move_dir, face_dir)
-	if self.jumping then return end
-	if face_dir then
-		self:set_yaw_by_direction(face_dir)
-	end
-	local speed = 1.5
-	local velocity = vector.multiply(vector.normalize(move_dir), speed)
+	local velocity = vector.multiply(vector.normalize(dir), forward_speed)
 	self.object:set_velocity(velocity)
 end
 
@@ -210,21 +179,24 @@ end
 -- initiates a jump, entity can´t change direction while in the air
 function WeldAllEntity.jump(self, speed)
 	if self.jumping then return end
-	minetest.debug("jumping!")
-	self:set_yaw_by_direction(speed)
 	self.object:set_velocity(speed)
 	self.jumping = true
+	self.has_control_command = true
 	--self.object:set_acceleration(get_gravity())
 end
 
 
-function WeldAllEntity.jump_or_go_to(self, target_pos, speed_multiplier)
-	local current_pos = self.object:get_pos()
-	if target_pos.y > current_pos.y + 0.4 then
-		self:jump(vector.subtract(target_pos, current_pos))
-	else -- else next step, follow next path.
-		self:change_direction(target_pos, speed_multiplier)
-	end
+function WeldAllEntity.turn_towards(self, target_face_yaw)
+	self.target_face_yaw = target_face_yaw
+	self.target_pos = nil
+	self.has_control_command = true
+end
+
+
+function WeldAllEntity.move_to(self, target_pos)
+	self.target_pos = target_pos
+	self.target_face_yaw = nil
+	self.has_control_command = true
 end
 
 
@@ -307,7 +279,7 @@ function WeldAllEntity.get_owner(self)
 end
 
 function WeldAllEntity.stop_movement(self)
-	self.object:setvelocity{x = 0, y = 0, z = 0}
+	self.object:setvelocity{x = 0, y = self.object:getvelocity().y, z = 0}
 end
 
 function is_entrance_node(pos)
@@ -392,6 +364,31 @@ function WeldAllEntity.can_dig_drop(self, pos)
 end
 
 
+local function on_step_internal(self, dtime, moveresult)
+	if not moveresult.touching_ground then return end
+	if self.target_pos then
+		if vector.distance(self.target_pos, self.object:getpos()) > 0.05 then
+			self:step_forward(1)
+		else
+			self.target_pos = nil
+		end
+	end
+	if self.target_face_yaw then
+		local current_face_yaw = self.object:get_yaw()
+		if not MathHelpers.angles_are_close(current_face_yaw, self.target_face_yaw, 0.03) then
+			local last_turn_speed = self.last_turn_speed or 0
+			self:stop_movement()
+			local turn_speed = math.min(6*math.abs(current_face_yaw - self.target_face_yaw), 6, 0.5 + last_turn_speed)
+			self.object:set_yaw(current_face_yaw + math.sign(self.target_face_yaw - current_face_yaw) * turn_speed * dtime)
+			self.last_turn_speed = turn_speed
+		else
+			self.object:set_yaw(self.target_face_yaw)
+			self.target_face_yaw = nil
+		end
+	end
+end
+
+
 
 -- if there is a wall left and right to the object
 function WeldAllEntity.has_left_right_support(self)
@@ -404,10 +401,19 @@ end
 
 function WeldAllEntity.on_step(self, dtime, moveresult)
 	local current_task = #self.tasks > 0 and self.tasks[1] or nil
+	
+	if not self.jumping and not self.has_control_command then
+		self:stop_movement()
+	end
+	
+	if self:has_left_right_support() then
+		self.object:set_acceleration(vector.new(0, 0, 0))
+	else
+		self.object:set_acceleration(get_gravity())
+	end
 
 	if not current_task then return end
-	--minetest.debug("colliding: " .. dump(moveresult.collides ))
-	--minetest.debug("jumping: " .. dump(self.jumping) .. " at height " .. self.object:get_pos().y)
+	
 	if moveresult.touching_ground then
 		self.jumping = false
 	end
@@ -416,17 +422,19 @@ function WeldAllEntity.on_step(self, dtime, moveresult)
 		current_task.initialized = true
 	end
 
+	self.has_control_command = false
+
 	current_task:on_step(self, dtime)
 	if current_task:completed(self) then
 		table.remove(self.tasks, 1)
 	end
 	
-	if self:has_left_right_support() then
-		minetest.debug("unset gravity accel")
-		self.object:set_acceleration(vector.new(0, 0, 0))
-	else
-		minetest.debug("set gravity accel")
-		self.object:set_acceleration(get_gravity())
+	if not self.jumping then
+		if self.has_control_command then
+			on_step_internal(self, dtime, moveresult)
+		else
+			self:stop_movement()
+		end
 	end
 end
 

@@ -8,6 +8,7 @@ function get_gravity()
 end
 
 
+dofile(wa_path.."/math_helpers.lua");
 dofile(wa_path.."/weld_all_entity.lua");
 dofile(wa_path.."/remote_control.lua");
 dofile(wa_path.."/commands.lua");
