@@ -1,12 +1,13 @@
 
 Command = {}
 
-function Command:new (o)
+function Command:new(o)
     o = o or {}
     setmetatable(o, self)
     self.__index = self
     return o
 end
+function Command:get_error(weld_all_entity) return nil end
 
 CommandFactory = {}
 
@@ -38,6 +39,12 @@ function SequenceCommand:on_step(weld_all_entity)
 		end
 	end
 end
+function SequenceCommand:get_error(weld_all_entity)
+	if self.subcommands and #self.subcommands > 0 then
+		return self.subcommands[1]:get_error(weld_all_entity)
+	end
+	return nil
+end
 
 
 -- if the waypoint has been passed in the previous time step with given threshold
@@ -62,8 +69,16 @@ end
 
 local function create_inner_move_command(weld_all_entity, target_pos, target_dir, speed_multiplier)
 	local current_pos = weld_all_entity.object:get_pos()
+	local pos_diff = vector.subtract(target_pos, current_pos)
 	if target_pos.y > current_pos.y + 0.4 then
 		return CommandFactory["jump"]:new({target_pos = target_pos, target_dir = target_dir})
+	elseif target_pos.y < current_pos.y - 0.4 then
+		local pos_diff_2d = vector.normalize(pos_diff)
+		if pos_diff.x * pos_diff.x + pos_diff.z * pos_diff.z > 0.5 then
+			return CommandFactory["precision_move"]:new({target_pos = vector.subtract(target_pos, vector.multiply(pos_diff_2d, 0.5)), target_dir = target_dir, movement_speed = 0.6})
+		else
+			return CommandFactory["precision_move"]:new({target_pos = vector.subtract(target_pos, vector.multiply(pos_diff_2d, 0.5)), target_dir = target_dir, movement_speed = 0.2})
+		end
 	else
 		return CommandFactory["precision_move"]:new({target_pos = target_pos, target_dir = target_dir})
 	end
@@ -78,8 +93,11 @@ function MoveCommand:new(o)
 	o.last_diff = 10000000
 	return o
 end
+MoveCommand.Errors = {
+	NoPath = "No path"
+}
 function MoveCommand:completed(weld_all_entity)
-	return #self.path == 0
+	return self.path and #self.path == 0
 end
 function MoveCommand:on_step(weld_all_entity, dtime)
 	if not self.path then
@@ -88,9 +106,9 @@ function MoveCommand:on_step(weld_all_entity, dtime)
 		else
 			self.path = weld_all_entity:find_path(self.target_pos)
 		end
-		if not self.path then
-			self.path = {}
-		end
+		--if not self.path then
+		--	self.path = {}
+		--end
 	end
 	if self.path and #self.path > 0 then
 		local current_pos = weld_all_entity.object:get_pos()
@@ -107,7 +125,7 @@ function MoveCommand:on_step(weld_all_entity, dtime)
 				weld_all_entity:stop_movement()
 				self.inner_command = nil
 			elseif not MathHelpers.angles_are_close(current_yaw, MathHelpers.dir_to_yaw(vector.subtract(self.path[1], current_pos), current_yaw), 0.01) then
-				local target_dir = vector.subtract(self.path[1], current_pos)
+				local target_dir = vector.direction(current_pos, self.path[1])
 				self.inner_command = CommandFactory["set_rotation"]:new({target_dir = target_dir})
 			else
 				self.inner_command = create_inner_move_command(weld_all_entity, self.path[1], target_dir)
@@ -133,6 +151,17 @@ function MoveCommand:on_step(weld_all_entity, dtime)
 		end
 		self.last_pos = current_pos
 	end
+end
+function MoveCommand:get_error(weld_all_entity)
+	if self.inner_command then
+		return self.inner_command:get_error(weld_all_entity)
+	end
+	local current_pos = weld_all_entity.object:get_pos()
+	local pos_diff = vector.distance(current_pos, self.target_pos)
+	if not self.inner_command and pos_diff > 0.05 then
+		return MoveCommand.Errors.NoPath
+	end
+	return nil
 end
 
 CommandFactory.register(MoveCommand)
@@ -254,6 +283,7 @@ end
 CommandFactory.register(TurnCommand)
 
 PrecisionMoveCommand = Command:new() -- needs target_pos, optionally target_dir - first turn towards and move forward to target, then turn into target_dir
+-- optionally movement_speed
 PrecisionMoveCommand.name = "precision_move"
 function PrecisionMoveCommand:completed(weld_all_entity)
 	return self.has_reached_target_pos
@@ -264,7 +294,7 @@ function PrecisionMoveCommand:on_step(weld_all_entity, dtime)
 	if not pos_is_near then
 		local target_face_yaw = MathHelpers.dir_to_yaw(vector.subtract(self.target_pos, weld_all_entity.object:get_pos()), current_face_yaw)
 		if MathHelpers.angles_are_close(current_face_yaw, target_face_yaw, 0.01) then
-			weld_all_entity:move_to(self.target_pos)
+			weld_all_entity:move_to(self.target_pos, self.movement_speed)
 		else
 			weld_all_entity:turn_towards(target_face_yaw)
 		end
@@ -330,25 +360,34 @@ CommandFactory.register(MineCommand)
 
 PlaceCommand = Command:new() -- needs target_pos, node, optionally provide a function should_place_on that checks if the node should actually be placed
 PlaceCommand.name = "place"
+PlaceCommand.Errors = {
+	NotInInventory = "Node not in inventory!",
+	PlacementDeniedByFunction = "Node should not be placed there.",
+	TooFarAway = "Target too far away!"
+}
 function PlaceCommand:completed(weld_all_entity)
-	return self.has_interacted
+	return self.error or (self.time_of_placement and self.time_of_placement + 0.99 < minetest.get_gametime()) -- time seems to be int
 end
 function PlaceCommand:on_step(weld_all_entity)
-	if is_near(weld_all_entity, self.target_pos, 2) and (not self.should_place_on or self.should_place_on(self.target_pos)) then
+	if self.has_interacted then return end
+	if not is_near(weld_all_entity, self.target_pos, 2) then
+		self.error = PlaceCommand.Errors.TooFarAway
+	elseif self.should_place_on and not self.should_place_on(self.target_pos) then
+		self.error = PlaceCommand.Errors.PlacementDeniedByFunction
+	else
 		local inv = weld_all_entity:get_inventory()		
 		local stack = inv:remove_item("main", self.node)
 		if stack:get_count() == 1 then
 			weld_all_entity:place(self.target_pos, self.node)
-			minetest.log("info", "PlaceObjectCommand: placed " .. self.node.name)
+			self.time_of_placement = minetest.get_gametime()
 		else
-			minetest.log("info", "PlaceObjectCommand: node " .. self.node.name .. " not in inventory!")
+			self.error = PlaceCommand.Errors.NotInInventory
 		end
-	elseif self.should_place_on and not self.should_place_on(self.target_pos) then
-		minetest.log("info", "PlaceObjectCommand: skip placement.")
-	else
-		minetest.log("info", "PlaceObjectCommand: cannot place object, target too far away!")
 	end
 	self.has_interacted = true
+end
+function PlaceCommand:get_error(weld_all_entity)
+	return self.error
 end
 CommandFactory.register(PlaceCommand)
 

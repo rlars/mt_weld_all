@@ -16,6 +16,10 @@ function MoveTask:completed()
     return self.command:completed()
 end
 
+function MoveTask:get_error(weld_all_entity)
+    return self.command:get_error(weld_all_entity)
+end
+
 function MoveTask:on_step(weld_all_entity, dtime)
     if self.command then
         self.command:on_step(weld_all_entity, dtime)

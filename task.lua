@@ -26,6 +26,10 @@ function CommandBasedTask:on_step(weld_all_entity)
     end
 end
 
+function CommandBasedTask:get_error(weld_all_entity)
+    return nil
+end
+
 function TaskFactory.register(task_factory)
     if not task_factory or not task_factory.name then
         minetest.debug("Cannot register unknown object as task factory")

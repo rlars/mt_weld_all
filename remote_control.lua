@@ -21,7 +21,7 @@ local function get_trapdoor_direction(pos)
 end
 
 
-local function check_if_entrance(pointed_thing, user, rc_context)
+local function act_if_entrance(pointed_thing, user, rc_context)
 	if is_entrance_node(pointed_thing.under) then
 		minetest.debug("going to entrance: " .. dump(pointed_thing.under))
 		local bot_forward_dir = get_trapdoor_direction(pointed_thing.under)
@@ -33,17 +33,26 @@ local function check_if_entrance(pointed_thing, user, rc_context)
 	end
 end
 
-local function check_if_dropsite(pointed_thing, user, rc_context)
-	local zone = MinMaxArea.find_area_in_list(zones.dropsites, pointed_thing.above)
+local function act_if_dropsite(pointed_thing, user, rc_context)
+	local player_store = user:get_meta()
+	local hud = datastore.get_table(user, "hud")
+	local selected_dropsite = hud:get_selected_point()
+	local zone = nil
+	if selected_dropsite then
+		minetest.debug("drop into " .. (selected_dropsite.name or "<unnamed site>"))
+		zone = selected_dropsite.area
+	else
+		local dropsites = minetest.deserialize(player_store:get_string("dropmarker_areas"))
+		zone = MinMaxArea.find_area_in_list(dropsites, pointed_thing.above)
+	end
 	if zone then
 		minetest.chat_send_player(user:get_player_name(), "Place items in given zone.")
-		minetest.debug("drop into " .. dump(zone))
 		rc_context.selected_obj:queue_task(TaskFactory["dump_items"].create(zone))
 		return true
 	end
 end
 
-local function check_if_close_on_floor(pointed_thing, user, rc_context)
+local function act_if_close_on_floor(pointed_thing, user, rc_context)
 	if vector.length(vector.subtract(user:get_pos(), pointed_thing.above)) < 1 then
 		--user:set_pos(pointed_thing.under)
 		rc_context.is_on_move_plate = not rc_context.is_on_move_plate
@@ -70,7 +79,7 @@ local function check_if_close_on_floor(pointed_thing, user, rc_context)
 	end
 end
 
-local function check_if_sneak(pointed_thing, user, rc_context)
+local function act_if_sneak(pointed_thing, user, rc_context)
 	if user:get_player_control().sneak then
 		minetest.debug("create mine")
 		rc_context.selected_obj:queue_task(
@@ -90,12 +99,12 @@ local function use_tool(_, user, pointed_thing)
 	local target_pos = nil
 	if pointed_thing.type == "node" then
 		if rc_context.selected_obj then
-			if  check_if_entrance(pointed_thing, user, rc_context) or
-				check_if_dropsite(pointed_thing, user, rc_context) or
-				check_if_close_on_floor(pointed_thing, user, rc_context) or
-				check_if_sneak(pointed_thing, user, rc_context)
+			if  act_if_entrance(pointed_thing, user, rc_context) or
+				act_if_dropsite(pointed_thing, user, rc_context) or
+				act_if_close_on_floor(pointed_thing, user, rc_context) or
+				act_if_sneak(pointed_thing, user, rc_context)
 				then
-					-- do nothing, check_... has already consumed the action
+					-- do nothing, act_if_... has already consumed the action
 			else
 				minetest.debug("send to location")
 				rc_context.selected_obj:queue_task(TaskFactory["move"].create(pointed_thing.above))
@@ -107,7 +116,7 @@ local function use_tool(_, user, pointed_thing)
 		local obj = pointed_thing.ref:get_luaentity()
 		if obj and obj.queue_task then
 			if rc_context.selected_obj then
-				show_inventory(user:get_player_name(), obj:get_inventory_name())
+				show_inventory(obj, user:get_player_name())
 			else
 				minetest.debug("selected")
 				rc_context.selected_obj = obj
@@ -130,10 +139,9 @@ minetest.register_craftitem("weld_all_bot:remote_control", {
 local function is_holding_rc(player, dtime)
 	local item = player:get_wielded_item()
 	local rc_context = get_player_table(player)
+	local hud = datastore.get_table(player, "hud")
     if item:get_name() == "weld_all_bot:remote_control" then
 		if not rc_context.using_rc then
-			local zones_hud = datastore.get_table(player, "zones_hud")
-			local theHud = zones_hud.hud
 			local bots_in_range = {}
 			local bot_hud_points = {}
 			for _, object in ipairs(minetest.get_objects_inside_radius(player:get_pos(), 100)) do
@@ -143,25 +151,22 @@ local function is_holding_rc(player, dtime)
 					table.insert(bot_hud_points, HudPoint.new(object:get_pos(), "([combine:48x48:8,8=weld_all_bot_back.png:^[resize:32x32)"))
 				end
 			end
-			Hud.add_hud_points(theHud, player, bot_hud_points)
-			zones_hud.bot_hud_points = bot_hud_points
+			hud:add_hud_points(player, bot_hud_points)
+			hud.bot_hud_points = bot_hud_points
 			rc_context.bots_in_range = bots_in_range
 			rc_context.using_rc = true
 		else
-			local zones_hud = datastore.get_table(player, "zones_hud")
 			for i, object in ipairs(rc_context.bots_in_range) do
 				if object and object.get_pos and object:get_pos() then -- if object is out of range, object:get_pos() might return nil
-					zones_hud.bot_hud_points[i].pos = object:get_pos()
+					hud.bot_hud_points[i].pos = object:get_pos()
 				end
 			end
-			Hud.update_hud(zones_hud.hud, player, true)
+			hud:update_hud(player, true)
 		end
 	else
 		if rc_context.using_rc then
-			local zones_hud = datastore.get_table(player, "zones_hud")
-			local theHud = zones_hud.hud
-			Hud.remove(theHud, player, zones_hud.bot_hud_points)
-			zones_hud.bot_hud_points = {}
+			hud:remove(player, hud.bot_hud_points)
+			hud.bot_hud_points = {}
 			rc_context.using_rc = false
 		end
 	end

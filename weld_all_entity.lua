@@ -131,12 +131,20 @@ function create_inventory(unique_name)
 end
 
 
-function show_inventory(playername, unique_name)
-	minetest.show_formspec(playername, "weld_all_bot:" .. unique_name, 
+function show_inventory(self, playername) -- self = weld_all_entity
+	local current_task_name = ""
+	local current_task_state = ""
+	if #self.tasks > 0 then
+		current_task_name = self.tasks[1].name
+		current_task_state = self.tasks[1]:get_error(self) or ""
+	end
+	minetest.show_formspec(playername, "weld_all_bot:" .. self:get_inventory_name(), 
 	"size[8,9]"..
 	"style_type[list;noclip=false;size=1.0,1.0;spacing=0.25,0.25]"..
-	"list[detached:" .. unique_name .. ";main;0,0;8,4;]" ..
-	"list[current_player;main;0,5;8,4;]")
+	"list[detached:" .. self:get_inventory_name() .. ";main;0,0;8,4;]" ..
+	"list[current_player;main;0,5;8,4;]" ..
+	"label[3.2,3.2;Task is ".. current_task_name .. "]" ..
+	"label[3.2,4.2;State is ".. current_task_state .. "]")
 end
 
 
@@ -156,13 +164,6 @@ function WeldAllEntity.get_left_node_pos(self)
 	local right = vector.rotate(vector.new(1, 0, 0), self.object:get_rotation())
 	local direction = minetest.facedir_to_dir(minetest.dir_to_facedir(right, true))
 	return vector.subtract(vector.round(self.object:getpos()), direction)
-end
-
-
-
-function WeldAllEntity.set_yaw_by_direction(self, direction)
-	if self.jumping then return end
-	self.object:setyaw(math.atan2(direction.z, direction.x))
 end
 
 
@@ -193,9 +194,10 @@ function WeldAllEntity.turn_towards(self, target_face_yaw)
 end
 
 
-function WeldAllEntity.move_to(self, target_pos)
+function WeldAllEntity.move_to(self, target_pos, movement_speed)
 	self.target_pos = target_pos
 	self.target_face_yaw = nil
+	self.movement_speed = movement_speed
 	self.has_control_command = true
 end
 
@@ -368,7 +370,7 @@ local function on_step_internal(self, dtime, moveresult)
 	if not moveresult.touching_ground then return end
 	if self.target_pos then
 		if vector.distance(self.target_pos, self.object:getpos()) > 0.05 then
-			self:step_forward(1)
+			self:step_forward(self.movement_speed or 1)
 		else
 			self.target_pos = nil
 		end
@@ -505,7 +507,7 @@ minetest.register_node("weld_all_bot:weld_all_bot_boxed", {
 		local dir = vector.subtract(vector.new(), minetest.facedir_to_dir(node.param2))
 		minetest.remove_node(pos)
 		local weld_all_entity = spawn_bot_at_pos(digger, pos)
-		weld_all_entity:set_yaw_by_direction(dir)
+		weld_all_entity.object:setyaw(math.atan2(dir.z, dir.x))
 		return true
 	end
 })
